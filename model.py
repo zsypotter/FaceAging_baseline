@@ -112,6 +112,7 @@ class Aging_Model(object):
         # network
         self.G = Generator().to(self.device)
         self.G = nn.DataParallel(self.G, list(range(args.ngpu)))
+        print_network(self.G)
 
     def train(self):
         # set random seed
