@@ -1,6 +1,7 @@
 import argparse
 import os
 import torch
+import time
 from model import Aging_Model
 
 parser = argparse.ArgumentParser()
@@ -9,9 +10,11 @@ parser.add_argument("--dataset", type=str, default='CACD2000', choices=['CACD200
 parser.add_argument("--age_part", type=str, default='3', choices=['1', '2', '3'])
 parser.add_argument("--epoch", type=int, default=50)
 parser.add_argument("--batch_size", type=int, default=8)
+parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--input_size", type=int, default=224)
 parser.add_argument('--save_dir', type=str, default='Pyramid-GAN/Dict/', help='Directory name to save the model')
 parser.add_argument('--result_dir', type=str, default='Pyramid-GAN/results/', help='Directory name to save the generated images')
+parser.add_argument('--log_dir', type=str, default='Pyramid-GAN/runs/')
 parser.add_argument('--p_w', type=float, default=0.2)
 parser.add_argument('--a_w', type=float, default=750)
 parser.add_argument('--i_w', type=float, default=0.0005)
@@ -22,7 +25,7 @@ parser.add_argument('--beta2', type=float, default=0.999)
 parser.add_argument('--random_seed', type=int, default=999)
 args = parser.parse_args()
 
-model_name = args.dataset + '_' + str(args.batch_size) + '_' + str(args.p_w) + '_' + str(args.a_w) + '_' + str(args.i_w) 
+model_name = args.dataset + '_' + str(args.batch_size) + '_' + str(args.p_w) + '_' + str(args.a_w) + '_' + str(args.i_w) + '_' + time.asctime(time.localtime(time.time()))
 
 if not os.path.exists(args.save_dir):
     os.makedirs(args.save_dir)
