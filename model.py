@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 import torchvision.transforms as transforms
+import torch.optim as optim
 import os
 import numpy
 import time
@@ -29,32 +30,19 @@ class ResidualBlock(nn.Module):
 
         return out
 
-class ConvLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride):
-        super(ConvLayer, self).__init__()
-        padding = kernel_size // 2
-        self.reflection_pad = nn.ReflectionPad2d(padding)
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride)
-
-    def forward(self, x):
-        out = self.reflection_pad(x)
-        out = self.conv(out)
-
-        return out
-
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
         self.in_channels = 3
 
         self.encoder = nn.Sequential(
-            ConvLayer(self.in_channels, 32, 9, 1),
+            nn.Conv2d(self.in_channels, 32, 9, 1, 4),
             nn.InstanceNorm2d(32),
             nn.ReLU(),
-            ConvLayer(32, 64, 3, 2),
+            nn.Conv2d(32, 64, 3, 2, 1),
             nn.InstanceNorm2d(64),
             nn.ReLU(),
-            ConvLayer(64, 128, 3, 2),
+            nn.Conv2d(64, 128, 3, 2, 1),
             nn.InstanceNorm2d(128),
             nn.ReLU(),
             ResidualBlock(128),
@@ -64,14 +52,15 @@ class Generator(nn.Module):
         )
 
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, 3, 2, 1),
+            nn.Conv2d(128, 512, 3, 1, 1),
+            nn.PixelShuffle(2),
             nn.InstanceNorm2d(64),
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, 3, 2, 1),
-            nn.InstanceNorm2d(32),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 3, 9, 1, 4),
-            #nn.InstanceNorm2d(3),
+            nn.ReLU(True),
+            nn.Conv2d(128, 512, 3, 1, 1),
+            nn.PixelShuffle(2),
+            nn.InstanceNorm2d(64),
+            nn.ReLU(True),
+            nn.Conv2d(128, 3, 9, 1, 4),
             nn.Tanh()
         )
 
@@ -104,6 +93,8 @@ class Aging_Model(object):
         self.beta2 = args.beta2
         self.random_seed = args.random_seed
         self.model_name = model_name
+        self.lr_decay_step = args.lr_decay_step
+        self.lr_decay = args.lr_decay
 
         # set gpu
          # set gpu device
@@ -113,6 +104,13 @@ class Aging_Model(object):
         self.G = Generator().to(self.device)
         self.G = nn.DataParallel(self.G, list(range(args.ngpu)))
         print_network(self.G)
+
+        # criterion
+        self.mse_criterion = nn.MSELoss(reduce=False)
+
+        # optimizer
+        self.G_optimizer = optim.Adam(self.G.parameters(), lr=self.lrG, betas=(self.beta1, self.beta2))
+        self.G_scheduler = torch.optim.lr_scheduler.StepLR(self.G_optimizer, self.lr_decay_step, gamma=self.lr_decay)
 
     def train(self):
         # set random seed
@@ -144,26 +142,34 @@ class Aging_Model(object):
 
         # train loop
         print("Starting Training Loop...")
-        iters = 0
+        iters_num = len(trainloader)
+        self.G.train()
         for epoch in range(self.epoch):
-            for i, data in enumerate(trainloader, 0):
-
+            self.G_scheduler.step()
+            for iters, data in enumerate(trainloader, 0):
                 start_time = time.clock()
+
+                # load data
                 young_imgs, old_imgs = data
                 young_imgs = young_imgs.to(self.device)
                 old_imgs = old_imgs.to(self.device)
                 young_imgs_generator = (young_imgs - generator_mean) / generator_std
                 young_imgs_vgg = (young_imgs - vgg_mean) / vgg_std
+
+                # update G
+                self.G.zero_grad()
                 fake_old_imgs = self.G(young_imgs_generator)
+                G_loss = self.mse_criterion(young_imgs_generator, fake_old_imgs) / (self.input_size * self.input_size * 3)
+                G_loss.backward()
+                self.G_optimizer.step()
+
                 end_time = time.clock()
-                print(iters, "per_iter:", end_time - start_time)
+                print('epochs: [{}/{}], iters: [{}/{}], per_iter {:.4f}, G_loss: {:.4f}, lrG: {:.8f}'.format(epoch, self.epoch, iters, iters_num, end_time - start_time, G_loss.item(), self.G_optimizer.param_groups[0]['lr']))
 
                 if iters % 10 == 0:
-                    writer.add_image("young_imgs_generator", young_imgs_generator, iters)
-                    writer.add_image("young_imgs_vgg", young_imgs_vgg, iters)
-                    writer.add_image("fake_old_imgs", fake_old_imgs, iters)
-
-                iters = iters + 1
+                    writer.add_image("young_imgs_generator", (young_imgs_generator + 1) / 2, iters + iters_num * epoch)
+                    writer.add_image("fake_old_imgs", (fake_old_imgs + 1) / 2, iters + iters_num * epoch)
+                    writer.add_scalar("G_loss", G_loss, iters + iters_num * epoch)
                 
 
     def test(self):
